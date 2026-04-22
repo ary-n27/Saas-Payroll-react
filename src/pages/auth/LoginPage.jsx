@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { Link } from 'react-router-dom';
+import { supabase } from '@/lib/supabase';
+import OtpVerificationModal from '@/components/OtpVerificationModal';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -10,24 +12,29 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const { signIn, user, profile, loading } = useAuth();
+  const { signIn, signOut, user, profile, loading } = useAuth();
   const navigate = useNavigate();
 
-  // Redirect if already logged in and profile is loaded
-  useEffect(() => {
-    if (!loading && user && profile) {
-      const dest = profile.role === 'employee' ? '/my-dashboard' : '/dashboard';
-      navigate(dest, { replace: true });
-    }
-  }, [user, profile, loading, navigate]);
+  // OTP state
+  const [otpPending, setOtpPending] = useState(false); // waiting for OTP verification
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpTarget, setOtpTarget] = useState('');
 
-  // After signIn, profile loads async — redirect when it arrives
+  // Redirect if already logged in, profile loaded, and OTP not pending
   useEffect(() => {
-    if (user && profile && submitting === false) {
+    if (!loading && user && profile && !otpPending) {
       const dest = profile.role === 'employee' ? '/my-dashboard' : '/dashboard';
       navigate(dest, { replace: true });
     }
-  }, [profile, user, submitting, navigate]);
+  }, [user, profile, loading, navigate, otpPending]);
+
+  // After OTP is verified and submitting is done, redirect when profile arrives
+  useEffect(() => {
+    if (user && profile && submitting === false && !otpPending) {
+      const dest = profile.role === 'employee' ? '/my-dashboard' : '/dashboard';
+      navigate(dest, { replace: true });
+    }
+  }, [profile, user, submitting, navigate, otpPending]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -37,7 +44,26 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await signIn(email, password);
-      // Redirect is handled by useEffect above once profile loads
+
+      // Credentials valid — now require OTP via SMS
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('phone')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (!userProfile?.phone) {
+        // No phone on file — cannot send OTP, sign out
+        await signOut();
+        setError('No phone number on your profile. Please contact your admin to add one.');
+        setSubmitting(false);
+        return;
+      }
+
+      setOtpTarget(userProfile.phone);
+      setOtpPending(true);
+      setShowOtpModal(true);
+      setSubmitting(false);
     } catch (err) {
       setError(
         err.message === 'Invalid login credentials'
@@ -46,6 +72,21 @@ export default function LoginPage() {
       );
       setSubmitting(false);
     }
+  };
+
+  const handleOtpVerified = () => {
+    setShowOtpModal(false);
+    setOtpPending(false);
+    // The useEffect above will handle the redirect once otpPending is false
+  };
+
+  const handleOtpCancel = async () => {
+    setShowOtpModal(false);
+    setOtpPending(false);
+    // Sign out the user since OTP was not verified
+    await signOut();
+    setError('Login cancelled. OTP verification is required.');
+    setSubmitting(false);
   };
 
   if (loading) {
@@ -176,6 +217,14 @@ export default function LoginPage() {
           </div>
         </div>
       </div>
+
+      <OtpVerificationModal
+        show={showOtpModal}
+        to={otpTarget}
+        channel="sms"
+        onVerified={handleOtpVerified}
+        onCancel={handleOtpCancel}
+      />
     </div>
   );
 }

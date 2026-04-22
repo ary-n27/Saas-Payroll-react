@@ -592,3 +592,22 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION clear_must_change_password() TO authenticated;
+
+
+-- =============================================================
+-- 8. OTP VERIFICATION SUPPORT
+-- =============================================================
+
+-- Track whether email and phone have been OTP-verified
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT false;
+
+-- Rate-limiting table for OTP attempts (used by Edge Functions)
+CREATE TABLE IF NOT EXISTS otp_attempts (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  identifier    text NOT NULL,         -- phone number or email
+  channel       text NOT NULL,         -- 'sms' or 'email'
+  attempted_at  timestamptz NOT NULL DEFAULT now(),
+  ip_address    text
+);
+CREATE INDEX IF NOT EXISTS idx_otp_attempts_identifier ON otp_attempts(identifier, attempted_at);
